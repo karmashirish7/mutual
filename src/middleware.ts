@@ -4,12 +4,19 @@ import { NextResponse, type NextRequest } from 'next/server'
 type CookieToSet = { name: string; value: string; options: CookieOptions }
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl
+
+  // If env vars are missing, skip auth checks and let pages handle it
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseKey) {
+    return NextResponse.next({ request })
+  }
+
   let supabaseResponse = NextResponse.next({ request })
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  try {
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll()
@@ -24,27 +31,31 @@ export async function middleware(request: NextRequest) {
           )
         },
       },
+    })
+
+    const { data: { user } } = await supabase.auth.getUser()
+
+    // Public routes
+    if (pathname.startsWith('/login') || pathname.startsWith('/auth')) {
+      if (user) {
+        return NextResponse.redirect(new URL('/dashboard', request.url))
+      }
+      return supabaseResponse
     }
-  )
 
-  const { data: { user } } = await supabase.auth.getUser()
-
-  const { pathname } = request.nextUrl
-
-  // Public routes
-  if (pathname.startsWith('/login') || pathname.startsWith('/auth')) {
-    if (user) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+    // Protected routes
+    if (!user) {
+      return NextResponse.redirect(new URL('/login', request.url))
     }
+
     return supabaseResponse
+  } catch {
+    // On any auth error, redirect unauthenticated routes to login
+    if (!pathname.startsWith('/login') && !pathname.startsWith('/auth')) {
+      return NextResponse.redirect(new URL('/login', request.url))
+    }
+    return NextResponse.next({ request })
   }
-
-  // Protected routes
-  if (!user) {
-    return NextResponse.redirect(new URL('/login', request.url))
-  }
-
-  return supabaseResponse
 }
 
 export const config = {
